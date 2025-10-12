@@ -1,0 +1,11 @@
+[project]
+name = "uc-intg-powerview"
+version = "0.2.1"
+description = "Unfolded Circle Hunter Douglas Powerview Integration"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiopvapi==3.2.1",
+    "ucapi==0.3.1",
+    "zeroconf>=0.147.0",
+]
