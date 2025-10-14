@@ -1,6 +1,6 @@
 [project]
 name = "uc-intg-powerview"
-version = "0.2.1"
+version = "0.1.0"
 description = "Unfolded Circle Hunter Douglas Powerview Integration"
 readme = "README.md"
 requires-python = ">=3.12"
