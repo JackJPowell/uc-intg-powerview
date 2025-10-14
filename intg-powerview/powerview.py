@@ -7,7 +7,7 @@ import asyncio
 import logging
 from asyncio import AbstractEventLoop
 from enum import StrEnum, IntEnum
-from typing import Any, ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar
 
 from aiopvapi.helpers.aiorequest import AioRequest
 from aiopvapi.hub import Hub
@@ -68,8 +68,10 @@ class SmartHub:
         self._connection_attempts: int = 0
         self._state: PowerState = PowerState.OFF
         self._features: dict = {}
-        self._covers: list[BaseShade] = []
-        self._scenes: list[Scene] = []
+        self._covers: list[PowerviewCoverInfo] = []
+        self._scenes: list[PowerviewSceneInfo] = []
+        self._raw_covers: list[BaseShade] = []
+        self._raw_scenes: list[Scene] = []
         self.radio_operation_lock = asyncio.Lock()
 
     @property
@@ -116,12 +118,12 @@ class SmartHub:
         return updated_data
 
     @property
-    def covers(self) -> list[Any]:
+    def covers(self) -> list[PowerviewCoverInfo]:
         """Return the list of cover entities."""
         return self._covers
 
     @property
-    def scenes(self) -> list[Any]:
+    def scenes(self) -> list[PowerviewSceneInfo]:
         """Return the list of scene entities."""
         return self._scenes
 
@@ -174,18 +176,20 @@ class SmartHub:
         try:
             await self.get_covers()
 
-            for entity in self._covers:
+            for cover_data in self._covers:
                 update = {}
                 update["state"] = (
-                    "OPEN" if entity.current_position.primary > 0 else "CLOSED"
+                    "OPEN"
+                    if cover_data.raw_shade.current_position.primary >= 5
+                    else "CLOSED"
                 )
-                update["position"] = entity.current_position.primary
+                update["position"] = cover_data.raw_shade.current_position.primary
 
                 self.events.emit(
                     EVENTS.UPDATE,
                     create_entity_id(
                         self.device_config.identifier,
-                        entity.id,
+                        cover_data.id,
                         EntityTypes.COVER,
                     ),
                     update,
@@ -204,26 +208,43 @@ class SmartHub:
         except Exception:  # pylint: disable=broad-exception-caught
             _LOG.exception("[%s] App list: protocol error", self.log_id)
 
-    async def get_covers(self) -> list[Any]:
+    async def get_covers(self) -> list[PowerviewCoverInfo]:
         """Return the list of cover entities."""
+        self._raw_covers = await self._cover_entry_point.get_instances()
 
-        self._covers = await self._cover_entry_point.get_instances()
+        # Wrap raw covers in PowerviewCoverInfo for consistent interface
+        self._covers = [
+            PowerviewCoverInfo(
+                device_id=str(shade.id),
+                type=str(getattr(shade, "type", "shade")),
+                name=shade.name,
+                position=shade.current_position.primary,
+                raw_shade=shade,
+            )
+            for shade in self._raw_covers
+        ]
         return self._covers
 
-    async def get_scenes(self) -> list[Any]:
+    async def get_scenes(self) -> list[PowerviewSceneInfo]:
         """Return the list of scene entities."""
-        self._scenes = await self._scene_member_entry_point.get_instances()
+        self._raw_scenes = await self._scene_entry_point.get_instances()
+
+        # Wrap raw scenes in PowerviewSceneInfo for consistent interface
+        self._scenes = [
+            PowerviewSceneInfo(scene_id=str(scene.id), name=scene.name, raw_scene=scene)
+            for scene in self._raw_scenes
+        ]
         return self._scenes
 
     async def activate_scene(self, scene_id: str) -> None:
         """Activate a scene."""
-        scene: Scene = next((s for s in self._scenes if s.id == scene_id), None)
-        if scene is None:
+        scene_data = next((s for s in self._scenes if s.id == scene_id), None)
+        if scene_data is None:
             _LOG.error("[%s] Scene %s not found", self.log_id, scene_id)
             return
         try:
             async with self.radio_operation_lock:
-                await scene.activate()
+                await scene_data.raw_scene.activate()
             self.events.emit(
                 EVENTS.UPDATE,
                 create_entity_id(
@@ -231,24 +252,32 @@ class SmartHub:
                     "0",
                     EntityTypes.MEDIA_PLAYER,
                 ),
-                {"source": scene.name},
+                {"source": scene_data.name},
             )
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error(
-                "[%s] Error activating scene %s: %s", self.log_id, scene.name, err
+                "[%s] Error activating scene %s: %s", self.log_id, scene_data.name, err
             )
 
     async def open_cover(self, cover_id: str, position: int = None) -> None:
         """Open a cover to a specific position."""
-        cover: BaseShade = next((c for c in self._covers if c.id == cover_id), None)
+        state = "OPEN"
+        cover_data = next((c for c in self._covers if c.id == cover_id), None)
+        if cover_data is None:
+            _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
+            return
+
         try:
             if position is not None:
                 raw_position = ShadePosition(position)
                 async with self.radio_operation_lock:
-                    await cover.move(raw_position)
+                    await cover_data.raw_shade.move(raw_position)
+                state = "OPEN" if position >= 5 else "CLOSED"
             else:
                 async with self.radio_operation_lock:
-                    await cover.open()
+                    await cover_data.raw_shade.open()
+
+                state = "OPEN"
                 self.events.emit(
                     EVENTS.UPDATE,
                     create_entity_id(
@@ -256,17 +285,21 @@ class SmartHub:
                         cover_id,
                         EntityTypes.COVER,
                     ),
-                    {"state": "OPEN", "position": position},
+                    {"state": state, "position": position},
                 )
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error("[%s] Error opening cover %s: %s", self.log_id, cover_id, err)
 
     async def close_cover(self, cover_id: str) -> None:
         """Close a cover."""
-        cover: BaseShade = next((c for c in self._covers if c.id == cover_id), None)
+        cover_data = next((c for c in self._covers if c.id == cover_id), None)
+        if cover_data is None:
+            _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
+            return
+
         try:
             async with self.radio_operation_lock:
-                await cover.close()
+                await cover_data.raw_shade.close()
             self.events.emit(
                 EVENTS.UPDATE,
                 create_entity_id(
@@ -283,10 +316,14 @@ class SmartHub:
 
     async def stop_cover(self, cover_id: str) -> None:
         """Stop a cover."""
-        cover: BaseShade = next((c for c in self._covers if c.id == cover_id), None)
+        cover_data = next((c for c in self._covers if c.id == cover_id), None)
+        if cover_data is None:
+            _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
+            return
+
         try:
             async with self.radio_operation_lock:
-                await cover.stop()
+                await cover_data.raw_shade.stop()
             self.events.emit(
                 EVENTS.UPDATE,
                 create_entity_id(
@@ -303,15 +340,19 @@ class SmartHub:
 
     async def toggle_cover(self, cover_id: str) -> None:
         """Toggle a cover."""
-        cover: BaseShade = next((c for c in self._covers if c.id == cover_id), None)
-        current_position = cover.current_position.primary
+        cover_data = next((c for c in self._covers if c.id == cover_id), None)
+        if cover_data is None:
+            _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
+            return
+
+        current_position = cover_data.raw_shade.current_position.primary
         try:
             if current_position == 0:
                 async with self.radio_operation_lock:
-                    await cover.open()
+                    await cover_data.raw_shade.open()
             else:
                 async with self.radio_operation_lock:
-                    await cover.close()
+                    await cover_data.raw_shade.close()
             self.events.emit(
                 EVENTS.UPDATE,
                 create_entity_id(
@@ -320,7 +361,7 @@ class SmartHub:
                     EntityTypes.COVER,
                 ),
                 {
-                    "state": "OPEN" if current_position == 0 else "CLOSED",
+                    "state": "OPEN" if current_position >= 5 else "CLOSED",
                     "position": 100 if current_position == 0 else 0,
                 },
             )

@@ -39,6 +39,7 @@ class PowerviewButton(Button):
         )
         self.config = config
         self.get_device = get_device
+        self.device: powerview.SmartHub = self.get_device(self.config.identifier)
 
         super().__init__(
             entity_id,

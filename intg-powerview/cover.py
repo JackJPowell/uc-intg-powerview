@@ -39,6 +39,21 @@ class PowerviewCover(Cover):
         )
         self.config = config
         self.get_device = get_device
+        self.device: powerview.SmartHub = self.get_device(self.config.identifier)
+        state = "UNKNOWN"
+        current_position = 0
+
+        if self.device and self.device.covers is not None:
+            this_cover = next(
+                (c for c in self.device.covers if c.id == cover_info.device_id),
+                None,
+            )
+        else:
+            this_cover = cover_info
+
+        if this_cover is not None:
+            current_position = this_cover.raw_shade.current_position.primary
+            state = "OPEN" if current_position >= 5 else "CLOSED"
 
         super().__init__(
             entity_id,
@@ -50,8 +65,8 @@ class PowerviewCover(Cover):
                 cover.Features.POSITION,
             ],
             attributes={
-                cover.Attributes.STATE: "UNKNOWN",
-                cover.Attributes.POSITION: 0,
+                cover.Attributes.STATE: state,
+                cover.Attributes.POSITION: 100 if current_position == 0 else 0,
             },
             device_class=cover.DeviceClasses.SHADE,
             cmd_handler=self.cover_cmd_handler,

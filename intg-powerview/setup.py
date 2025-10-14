@@ -6,17 +6,12 @@ import asyncio
 import logging
 from enum import IntEnum
 from ipaddress import ip_address
-import os
-import sys
 
 import config
 from config import PowerviewConfig
 from discover import ZeroconfScanner
 from aiopvapi.helpers.aiorequest import AioRequest
 from aiopvapi.hub import Hub
-from aiopvapi.shades import Shades, ATTR_SHADE_DATA
-from aiopvapi.scenes import Scenes, ATTR_SCENE_DATA
-from const import PowerviewCoverInfo, PowerviewSceneInfo
 from ucapi import (
     AbortDriverSetup,
     DriverSetupRequest,
@@ -341,8 +336,6 @@ async def _handle_creation(
     """
 
     ip = msg.input_values["ip"]
-    sceneinfo = []
-    coverinfo = []
 
     if ip != "":
         # Check if input is a valid ipv4 or ipv6 address
@@ -357,43 +350,24 @@ async def _handle_creation(
         try:
             request = AioRequest(ip)
             hub = Hub(request)
-            _shades_entry_point = Shades(request)
-            _scenes_entry_point = Scenes(request)
             try:
                 await hub.query_firmware()
-                covers = await _shades_entry_point.get_resources()
-                scenes = await _scenes_entry_point.get_resources()
+                _LOG.info("Successfully connected to PowerView hub")
+                _LOG.info("Hub Name: %s", hub.hub_name)
+                _LOG.info("Model: %s", hub.model)
+                _LOG.info("Serial: %s", hub.serial_number)
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 _LOG.error("Unable to query the Powerview Device: %s", ex)
                 return SetupError(IntegrationSetupError.NOT_FOUND)
-            _LOG.debug("Powerview Smart Hub info: %s", covers)
 
-            for cover in covers[ATTR_SHADE_DATA]:
-                coverinfo.append(
-                    PowerviewCoverInfo(
-                        device_id=cover["id"],
-                        type=cover["type"],
-                        name=cover["name_unicode"],
-                    )
-                )
-            _LOG.debug("Found cover: %s", coverinfo)
-
-            for scene in scenes[ATTR_SCENE_DATA]:
-                sceneinfo.append(
-                    PowerviewSceneInfo(
-                        scene_id=scene["id"],
-                        name=scene["name_unicode"],
-                    )
-                )
-            _LOG.debug("Found scene: %s", sceneinfo)
+            # Note: We no longer fetch and store covers/scenes here
+            # They will be pulled dynamically when the hub connects
 
             device = PowerviewConfig(
                 identifier=hub.serial_number,
                 address=ip,
                 name=hub.hub_name,
                 model=hub.model,
-                covers=coverinfo,
-                scenes=sceneinfo,
             )
 
             config.devices.add_or_update(device)

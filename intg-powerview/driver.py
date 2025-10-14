@@ -25,6 +25,7 @@ from config import (
     create_entity_id,
     type_from_entity_id,
 )
+from const import PowerviewCoverInfo, PowerviewSceneInfo
 import powerview
 
 _LOG = logging.getLogger("driver")  # avoid having __main__ in log messages
@@ -77,21 +78,23 @@ async def on_subscribe_entities(entity_ids: list[str]) -> None:
 
     :param entity_ids: entity identifiers.
     """
-    _LOG.debug("Subscribe entities event: %s", entity_ids)
+    _LOG.info("Subscribe request for %d entities", len(entity_ids))
 
     if entity_ids is not None and len(entity_ids) > 0:
         device_id = device_from_entity_id(entity_ids[0])
         if device_id not in _configured_devices:
-            device = config.devices.get(device_id)
-            if device:
-                _add_configured_device(device)
+            device_config = config.devices.get(device_id)
+            if device_config:
+                # Add and connect to the device, which will also register entities
+                await _add_configured_device(device_config, connect=True)
             else:
                 _LOG.error(
                     "Failed to subscribe entity %s: no instance found", device_id
                 )
                 return
-        device = _configured_devices[device_id]
-        if not device.is_connected:
+
+        device = _configured_devices.get(device_id)
+        if device and not device.is_connected:
             attempt = 0
             while attempt := attempt + 1 < 4:
                 _LOG.debug(
@@ -99,11 +102,13 @@ async def on_subscribe_entities(entity_ids: list[str]) -> None:
                     device_id,
                     attempt,
                 )
-                if not await device.connect():
+                if await device.connect():
+                    # After successful connection, register entities from the hub
+                    await _register_available_entities_from_hub(device)
+                    break
+                else:
                     await device.disconnect()
                     await asyncio.sleep(0.5)
-                else:
-                    break
 
     for entity_id in entity_ids:
         device_id = device_from_entity_id(entity_id)
@@ -132,11 +137,14 @@ async def on_subscribe_entities(entity_ids: list[str]) -> None:
                     ),
                     None,
                 )
-
                 if entity is not None:
                     update = {}
-                    update["state"] = "CLOSED"
-                    update["position"] = 100
+                    update["state"] = (
+                        "OPEN"
+                        if entity.raw_shade.current_position.primary >= 5
+                        else "CLOSED"
+                    )
+                    update["position"] = entity.raw_shade.current_position.primary
                     api.configured_entities.update_attributes(entity_id, update)
         continue
 
@@ -224,7 +232,7 @@ async def on_device_update(entity_id: str, update: dict[str, Any] | None) -> Non
             attributes[ucapi.cover.Attributes.STATE] = update["state"]
 
         if "position" in update:
-            attributes[ucapi.cover.Attributes.POSITION] = int(update["position"])
+            attributes[ucapi.cover.Attributes.POSITION] = update["position"]
 
     elif configured_entity.entity_type == ucapi.EntityTypes.BUTTON:
         if "state" in update:
@@ -237,61 +245,129 @@ async def on_device_update(entity_id: str, update: dict[str, Any] | None) -> Non
             api.available_entities.update_attributes(entity_id, attributes)
 
 
-def _add_configured_device(
-    device_config: PowerviewConfig, connect: bool = False
+async def _add_configured_device(
+    device_config: PowerviewConfig, connect: bool = True
 ) -> None:
+    """Add and optionally connect to a PowerView hub, then register its entities.
+
+    :param device_config: The PowerView hub configuration
+    :param connect: Whether to connect immediately (default True)
+    """
     # the device should not yet be configured, but better be safe
     if device_config.identifier in _configured_devices:
-        _LOG.debug(
-            "DISCONNECTING: Existing configured device updated, update the running device %s",
-            device_config,
+        _LOG.info(
+            "Updating existing device: %s",
+            device_config.identifier,
         )
         device = _configured_devices[str(device_config.identifier)]
-        _LOOP.create_task(device.disconnect())
-    else:
-        _LOG.debug(
-            "Adding new device: %s (%s)",
-            device_config.identifier,
-            device_config.address,
-        )
-        device = powerview.SmartHub(device_config, loop=_LOOP)
-        device.events.on(powerview.EVENTS.CONNECTED, on_device_connected)
-        device.events.on(powerview.EVENTS.DISCONNECTED, on_device_disconnected)
-        device.events.on(powerview.EVENTS.ERROR, on_device_connection_error)
-        device.events.on(powerview.EVENTS.UPDATE, on_device_update)
+        await device.disconnect()
 
-        _configured_devices[str(device.identifier)] = device
+    _LOG.info(
+        "Adding new device: %s (%s)",
+        device_config.identifier,
+        device_config.address,
+    )
+    device = powerview.SmartHub(device_config, loop=_LOOP)
+    device.events.on(powerview.EVENTS.CONNECTED, on_device_connected)
+    device.events.on(powerview.EVENTS.DISCONNECTED, on_device_disconnected)
+    device.events.on(powerview.EVENTS.ERROR, on_device_connection_error)
+    device.events.on(powerview.EVENTS.UPDATE, on_device_update)
 
-    async def start_connection():
-        await device.connect()
+    _configured_devices[str(device.identifier)] = device
 
     if connect:
-        _LOOP.create_task(start_connection())
+        # Connect to the PowerView hub first
+        _LOG.info(
+            "Connecting to PowerView hub: %s",
+            device_config.identifier,
+        )
+        connected = await device.connect()
 
-    _register_available_entities(device_config)
+        if connected:
+            _LOG.info(
+                "Successfully connected to PowerView hub: %s",
+                device_config.identifier,
+            )
+
+            # Now that we're connected, register entities from the hub
+            await _register_available_entities_from_hub(device)
+        else:
+            _LOG.error(
+                "Failed to connect to PowerView hub: %s",
+                device_config.identifier,
+            )
 
 
-def _register_available_entities(device_config: PowerviewConfig) -> bool:
+async def _register_available_entities_from_hub(device: powerview.SmartHub) -> bool:
     """
-    Add a new device to the available entities.
+    Register entities by querying the PowerView hub for its devices.
 
-    :param identifier: identifier
-    :param name: Friendly name
-    :return: True if added, False if the device was already in storage.
+    This is called after the hub is connected and retrieves the actual
+    devices from the PowerView network rather than from stored config.
+
+    :param device: The connected SmartHub instance
+    :return: True if entities were registered successfully
     """
-    _LOG.info("_register_available_entities for %s", device_config.identifier)
-    entities = []
-    for scene in device_config.scenes:
-        entities.append(PowerviewButton(device_config, scene, get_configured_device))
+    _LOG.info(
+        "Registering available entities from PowerView hub: %s",
+        device.identifier,
+    )
 
-    for entity in device_config.covers:
-        entities.append(PowerviewCover(device_config, entity, get_configured_device))
+    try:
+        # Get covers from the hub (this queries the PowerView network)
+        if device.covers is None:
+            covers = await device.get_covers()
+        _LOG.info("Found %d covers on PowerView network", len(device.covers))
 
-    for entity in entities:
-        if api.available_entities.contains(entity):
-            api.available_entities.remove(entity)
-        api.available_entities.add(entity)
-    return True
+        # Get scenes from the hub (this queries the PowerView network)
+        if device.scenes is None:
+            scenes = await device.get_scenes()
+        _LOG.info("Found %d scenes on PowerView network", len(device.scenes))
+
+        entities = []
+
+        # Create cover entities from what the hub reports
+        for cover in device.covers:
+            _LOG.debug(
+                "Registering cover: %s (id %s)",
+                cover.name,
+                cover.id,
+            )
+            # Determine cover type based on available information
+            cover_entity = PowerviewCover(
+                device.device_config, cover, get_configured_device
+            )
+            entities.append(cover_entity)
+
+        # Create scene/button entities from what the hub reports
+        for scene in device.scenes:
+            _LOG.debug(
+                "Registering scene: %s (id %s)",
+                scene.name,
+                scene.id,
+            )
+            button_entity = PowerviewButton(
+                device.device_config, scene, get_configured_device
+            )
+            entities.append(button_entity)
+
+        # Register all entities with the API
+        for entity in entities:
+            if api.available_entities.contains(entity.id):
+                _LOG.debug("Removing existing entity: %s", entity.id)
+                api.available_entities.remove(entity.id)
+            _LOG.debug("Adding entity: %s", entity.id)
+            api.available_entities.add(entity)
+
+        _LOG.info(
+            "Successfully registered %d entities from PowerView hub",
+            len(entities),
+        )
+        return True
+
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        _LOG.error("Error registering entities from hub: %s", ex)
+        return False
 
 
 def _entities_from_device_id(device_id: str) -> list[str]:
@@ -301,16 +377,17 @@ def _entities_from_device_id(device_id: str) -> list[str]:
     :param device_id: the device identifier
     :return: list of entity identifiers
     """
-    # get from config
+    # Get from configured device instance
     entities = []
-    device = config.devices.get(device_id)
+    device = _configured_devices.get(device_id)
     if device:
+        # Get entities from the live device instance
         entities.extend(
-            create_entity_id(device.identifier, scene.scene_id, EntityTypes.BUTTON)
+            create_entity_id(device.identifier, str(scene.id), EntityTypes.BUTTON)
             for scene in device.scenes
         )
         entities.extend(
-            create_entity_id(device.identifier, cover.device_id, EntityTypes.COVER)
+            create_entity_id(device.identifier, str(cover.id), EntityTypes.COVER)
             for cover in device.covers
         )
     return entities
@@ -319,7 +396,8 @@ def _entities_from_device_id(device_id: str) -> list[str]:
 def on_device_added(device: PowerviewConfig) -> None:
     """Handle a newly added device in the configuration."""
     _LOG.debug("New device added: %s", device)
-    _add_configured_device(device)
+    # Schedule the async device addition
+    _LOOP.create_task(_add_configured_device(device, connect=True))
 
 
 def on_device_removed(device: PowerviewConfig | None) -> None:
@@ -363,8 +441,10 @@ async def main():
         api.config_dir_path, on_device_added, on_device_removed
     )
 
+    # Connect to all configured PowerView hubs
     for device_config in config.devices.all():
-        _register_available_entities(device_config)
+        _LOG.info("Initializing PowerView hub: %s", device_config.identifier)
+        await _add_configured_device(device_config, connect=True)
 
     await api.init("driver.json", setup.driver_setup_handler)
 

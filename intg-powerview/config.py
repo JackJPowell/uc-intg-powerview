@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from ucapi import EntityTypes
-from const import PowerviewCoverInfo, PowerviewSceneInfo
 
 _LOG = logging.getLogger(__name__)
 _CFG_FILENAME = "config.json"
@@ -63,9 +62,6 @@ class PowerviewConfig:
     """Name of the device."""
     model: str
     """Model name of the device."""
-    covers: list[PowerviewCoverInfo] = dataclasses.field(default_factory=list)
-    """List of configured covers."""
-    scenes: list[PowerviewSceneInfo] = dataclasses.field(default_factory=list)
 
 
 class _EnhancedJSONEncoder(json.JSONEncoder):
@@ -194,35 +190,14 @@ class Devices:
             for item in data:
                 # not using PowerviewConfig(**item) to be able to migrate
                 # old configuration files with missing attributes
-                sceneinfo = []
-                coverinfo = []
                 config = PowerviewConfig(
-                    str(item.get("identifier")),
-                    item.get("address"),
-                    item.get("name"),
-                    item.get("model"),
-                    item.get("covers", []),
-                    item.get("scenes", []),
+                    identifier=str(item.get("identifier")),
+                    address=item.get("address"),
+                    name=item.get("name"),
+                    model=item.get("model"),
                 )
-
-                for cover in config.covers:
-                    coverinfo.append(
-                        PowerviewCoverInfo(
-                            device_id=cover["device_id"],
-                            type=cover["type"],
-                            name=cover["name"],
-                        )
-                    )
-                config.covers = coverinfo
-
-                for scene in config.scenes:
-                    sceneinfo.append(
-                        PowerviewSceneInfo(
-                            scene_id=scene["scene_id"],
-                            name=scene["name"],
-                        )
-                    )
-                config.scenes = sceneinfo
+                # Note: covers and scenes are no longer stored in config
+                # They will be pulled dynamically from the hub on connection
 
                 self._config.append(config)
             return True
