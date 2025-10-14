@@ -251,7 +251,7 @@ Contributions are always welcome! Whether it's bug reports, feature requests, or
 
 ### Development Setup
 
-\`\`\`bash
+```bash
 # Clone the repository
 git clone https://github.com/JackJPowell/uc-intg-powerview.git
 cd uc-intg-powerview
@@ -261,7 +261,7 @@ pip install -r requirements.txt
 
 # Run the integration
 python intg-powerview/driver.py
-\`\`\`
+```
 
 
 ---
