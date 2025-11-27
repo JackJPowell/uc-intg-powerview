@@ -2,44 +2,18 @@
 
 """Module that includes all functions needed for the setup and reconfiguration process"""
 
-import asyncio
 import logging
-from enum import IntEnum
 from ipaddress import ip_address
-
-import config
-from config import PowerviewConfig
-from discover import ZeroconfScanner
+from typing import Any
+from const import PowerviewDevice
 from aiopvapi.helpers.aiorequest import AioRequest
 from aiopvapi.hub import Hub
-from ucapi import (
-    AbortDriverSetup,
-    DriverSetupRequest,
-    IntegrationSetupError,
-    RequestUserInput,
-    SetupAction,
-    SetupComplete,
-    SetupDriver,
-    SetupError,
-    UserDataResponse,
-)
+from ucapi import IntegrationSetupError, RequestUserInput, SetupError
+from ucapi_framework import BaseSetupFlow
 
 _LOG = logging.getLogger(__name__)
 
-
-class SetupSteps(IntEnum):
-    """Enumeration of setup steps to keep track of user data responses."""
-
-    INIT = 0
-    CONFIGURATION_MODE = 1
-    DISCOVER = 2
-    DEVICE_CHOICE = 3
-
-
-_setup_step = SetupSteps.INIT
-_cfg_add_device: bool = False
-
-_user_input_manual = RequestUserInput(
+_MANUAL_INPUT_SCHEMA = RequestUserInput(
     {"en": "Hunter Douglas Powerview Setup"},
     [
         {
@@ -59,7 +33,7 @@ _user_input_manual = RequestUserInput(
         },
         {
             "field": {"text": {"value": ""}},
-            "id": "ip",
+            "id": "address",
             "label": {
                 "en": "IP Address",
             },
@@ -68,315 +42,62 @@ _user_input_manual = RequestUserInput(
 )
 
 
-async def driver_setup_handler(
-    msg: SetupDriver,
-) -> SetupAction:
+class PowerviewSetupFlow(BaseSetupFlow[PowerviewDevice]):
     """
-    Dispatch driver setup requests to corresponding handlers.
+    Setup flow for PowerView integration.
 
-    Either start the setup process or handle the provided user input data.
-
-    :param msg: the setup driver request object, either DriverSetupRequest,
-                UserDataResponse or UserConfirmationResponse
-    :return: the setup action on how to continue
-    """
-    global _setup_step  # pylint: disable=global-statement
-    global _cfg_add_device  # pylint: disable=global-statement
-
-    if isinstance(msg, DriverSetupRequest):
-        _setup_step = SetupSteps.INIT
-        _cfg_add_device = False
-        return await _handle_driver_setup(msg)
-    if isinstance(msg, UserDataResponse):
-        _LOG.debug("%s", msg)
-        if (
-            _setup_step == SetupSteps.CONFIGURATION_MODE
-            and "action" in msg.input_values
-        ):
-            return await _handle_configuration_mode(msg)
-        if (
-            _setup_step == SetupSteps.DISCOVER
-            and "ip" in msg.input_values
-            and msg.input_values.get("ip") != "manual"
-        ):
-            return await _handle_creation(msg)
-        if (
-            _setup_step == SetupSteps.DISCOVER
-            and "ip" in msg.input_values
-            and msg.input_values.get("ip") == "manual"
-        ):
-            return await _handle_manual()
-        _LOG.error("No user input was received for step: %s", msg)
-    elif isinstance(msg, AbortDriverSetup):
-        _LOG.info("Setup was aborted with code: %s", msg.error)
-        _setup_step = SetupSteps.INIT
-
-    return SetupError()
-
-
-async def _handle_configuration_mode(
-    msg: UserDataResponse,
-) -> RequestUserInput | SetupComplete | SetupError:
-    """
-    Process user data response from the configuration mode screen.
-
-    User input data:
-
-    - ``choice`` contains identifier of selected device
-    - ``action`` contains the selected action identifier
-
-    :param msg: user input data from the configuration mode screen.
-    :return: the setup action on how to continue
-    """
-    global _setup_step  # pylint: disable=global-statement
-    global _cfg_add_device  # pylint: disable=global-statement
-
-    action = msg.input_values["action"]
-
-    # workaround for web-configurator not picking up first response
-    await asyncio.sleep(1)
-
-    match action:
-        case "add":
-            _cfg_add_device = True
-            _setup_step = SetupSteps.DISCOVER
-            return await _handle_discovery()
-        case "update":
-            choice = int(msg.input_values["choice"])
-            msg.input_values["ip"] = config.devices.get(choice).address
-            return await _handle_creation(msg)
-        case "remove":
-            choice = int(msg.input_values["choice"])
-            if not config.devices.remove(choice):
-                _LOG.warning("Could not remove device from configuration: %s", choice)
-                return SetupError(error_type=IntegrationSetupError.OTHER)
-            config.devices.store()
-            return SetupComplete()
-        case "reset":
-            config.devices.clear()  # triggers device instance removal
-            _setup_step = SetupSteps.DISCOVER
-            return await _handle_discovery()
-        case _:
-            _LOG.error("Invalid configuration action: %s", action)
-            return SetupError(error_type=IntegrationSetupError.OTHER)
-
-    _setup_step = SetupSteps.DISCOVER
-    return _user_input_manual
-
-
-async def _handle_manual() -> RequestUserInput | SetupError:
-    return _user_input_manual
-
-
-async def _handle_discovery() -> RequestUserInput | SetupError:
-    """
-    Process user data response from the first setup process screen.
-    """
-    global _setup_step  # pylint: disable=global-statement
-
-    zeroconf = ZeroconfScanner()
-    await zeroconf.scan()
-    if len(zeroconf.found_services) > 0:
-        _LOG.debug("Found Powerview Devices")
-
-        dropdown_devices = []
-        for device in zeroconf.found_services:
-            dropdown_devices.append(
-                {"id": device.address, "label": {"en": device.address}}
-            )
-
-        dropdown_devices.append({"id": "manual", "label": {"en": "Setup Manually"}})
-
-        return RequestUserInput(
-            {"en": "Discovered Powerview Devices"},
-            [
-                {
-                    "id": "ip",
-                    "label": {
-                        "en": "Discovered Smart Hubs:",
-                    },
-                    "field": {
-                        "dropdown": {
-                            "value": dropdown_devices[0]["id"],
-                            "items": dropdown_devices,
-                        }
-                    },
-                },
-            ],
-        )
-
-    # Initial setup, make sure we have a clean configuration
-    config.devices.clear()  # triggers device instance removal
-    _setup_step = SetupSteps.DISCOVER
-    return _user_input_manual
-
-
-async def _handle_driver_setup(
-    msg: DriverSetupRequest,
-) -> RequestUserInput | SetupError:
-    """
-    Start driver setup.
-
-    Initiated by Remote Two to set up the driver. The reconfigure flag determines the setup flow:
-
-    - Reconfigure is True:
-        show the configured devices and ask user what action to perform (add, delete, reset).
-    - Reconfigure is False: clear the existing configuration and show device discovery screen.
-      Ask user to enter ip-address for manual configuration, otherwise auto-discovery is used.
-
-    :param msg: driver setup request data, only `reconfigure` flag is of interest.
-    :return: the setup action on how to continue
-    """
-    global _setup_step  # pylint: disable=global-statement
-
-    reconfigure = msg.reconfigure
-    _LOG.debug("Starting driver setup, reconfigure=%s", reconfigure)
-
-    if reconfigure:
-        _setup_step = SetupSteps.CONFIGURATION_MODE
-
-        # get all configured devices for the user to choose from
-        dropdown_devices = []
-        for device in config.devices.all():
-            dropdown_devices.append(
-                {"id": str(device.identifier), "label": {"en": f"{device.name}"}}
-            )
-
-        dropdown_actions = [
-            {
-                "id": "add",
-                "label": {
-                    "en": "Add a new Powerview Smart Hub",
-                },
-            },
-        ]
-
-        # add remove & reset actions if there's at least one configured device
-        if dropdown_devices:
-            dropdown_actions.append(
-                {
-                    "id": "update",
-                    "label": {
-                        "en": "Update information for selected Powerview Smart Hub",
-                    },
-                },
-            )
-            dropdown_actions.append(
-                {
-                    "id": "remove",
-                    "label": {
-                        "en": "Remove selected Powerview Smart Hub",
-                    },
-                },
-            )
-            dropdown_actions.append(
-                {
-                    "id": "reset",
-                    "label": {
-                        "en": "Reset configuration and reconfigure",
-                        "de": "Konfiguration zurücksetzen und neu konfigurieren",
-                        "fr": "Réinitialiser la configuration et reconfigurer",
-                    },
-                },
-            )
-        else:
-            # dummy entry if no devices are available
-            dropdown_devices.append({"id": "", "label": {"en": "---"}})
-
-        return RequestUserInput(
-            {"en": "Configuration mode", "de": "Konfigurations-Modus"},
-            [
-                {
-                    "field": {
-                        "dropdown": {
-                            "value": dropdown_devices[0]["id"],
-                            "items": dropdown_devices,
-                        }
-                    },
-                    "id": "choice",
-                    "label": {
-                        "en": "Configured Devices",
-                        "de": "Konfigurerte Geräte",
-                        "fr": "Appareils configurés",
-                    },
-                },
-                {
-                    "field": {
-                        "dropdown": {
-                            "value": dropdown_actions[0]["id"],
-                            "items": dropdown_actions,
-                        }
-                    },
-                    "id": "action",
-                    "label": {
-                        "en": "Action",
-                        "de": "Aktion",
-                        "fr": "Appareils configurés",
-                    },
-                },
-            ],
-        )
-
-    # Initial setup, make sure we have a clean configuration
-    config.devices.clear()  # triggers device instance removal
-    _setup_step = SetupSteps.DISCOVER
-    return await _handle_discovery()
-
-
-async def _handle_creation(
-    msg: DriverSetupRequest,
-) -> RequestUserInput | SetupError:
-    """
-    Start driver setup.
-
-    Initiated by Remote Two to set up the driver.
-
-    :param msg: value(s) of input fields in the first setup screen.
-    :return: the setup action on how to continue
+    Handles PowerView device configuration through SSDP discovery or manual entry.
     """
 
-    ip = msg.input_values["ip"]
+    def get_manual_entry_form(self) -> RequestUserInput:
+        """
+        Return the manual entry form for device setup.
 
-    if ip != "":
-        # Check if input is a valid ipv4 or ipv6 address
-        try:
-            ip_address(ip)
-        except ValueError:
-            _LOG.error("The entered ip address %s is not valid", ip)
-            return SetupError(IntegrationSetupError.NOT_FOUND)
+        :return: RequestUserInput with form fields for manual configuration
+        """
+        return _MANUAL_INPUT_SCHEMA
 
-        _LOG.info("Entered ip address: %s", ip)
+    async def query_device(
+        self, input_values: dict[str, Any]
+    ) -> PowerviewDevice | SetupError | RequestUserInput:
+        address = input_values["address"]
 
-        try:
-            request = AioRequest(ip)
-            hub = Hub(request)
+        if address != "":
+            # Check if input is a valid ipv4 or ipv6 address
             try:
-                await hub.query_firmware()
-                _LOG.info("Successfully connected to PowerView hub")
-                _LOG.info("Hub Name: %s", hub.hub_name)
-                _LOG.info("Model: %s", hub.model)
-                _LOG.info("Serial: %s", hub.serial_number)
+                ip_address(address)
+            except ValueError:
+                _LOG.error("The entered ip address %s is not valid", address)
+                return _MANUAL_INPUT_SCHEMA
+
+            _LOG.info("Entered ip address: %s", address)
+
+            try:
+                request = AioRequest(address)
+                hub = Hub(request)
+                try:
+                    await hub.query_firmware()
+                    _LOG.info("Successfully connected to PowerView hub")
+                    _LOG.info("Hub Name: %s", hub.hub_name)
+                    _LOG.info("Model: %s", hub.model)
+                    _LOG.info("Serial: %s", hub.serial_number)
+                except Exception as ex:  # pylint: disable=broad-exception-caught
+                    _LOG.error("Unable to query the Powerview Device: %s", ex)
+                    return SetupError(IntegrationSetupError.NOT_FOUND)
+
+                return PowerviewDevice(
+                    identifier=hub.serial_number,
+                    address=address,
+                    name=hub.hub_name,
+                    model=hub.model,
+                )
+
             except Exception as ex:  # pylint: disable=broad-exception-caught
-                _LOG.error("Unable to query the Powerview Device: %s", ex)
-                return SetupError(IntegrationSetupError.NOT_FOUND)
-
-            # Note: We no longer fetch and store covers/scenes here
-            # They will be pulled dynamically when the hub connects
-
-            device = PowerviewConfig(
-                identifier=hub.serial_number,
-                address=ip,
-                name=hub.hub_name,
-                model=hub.model,
-            )
-
-            config.devices.add_or_update(device)
-        except Exception as ex:  # pylint: disable=broad-exception-caught
-            _LOG.error("Unable to connect at IP: %s. Exception: %s", ip, ex)
-            _LOG.info("Please check if you entered the correct ip of the Powerview hub")
-            return SetupError(IntegrationSetupError.CONNECTION_REFUSED)
-    else:
-        _LOG.info("No ip address entered")
-        return SetupError(IntegrationSetupError.OTHER)
-    _LOG.info("Setup complete")
-    return SetupComplete()
+                _LOG.error("Unable to connect at IP: %s. Exception: %s", address, ex)
+                _LOG.info(
+                    "Please check if you entered the correct ip of the Powerview hub"
+                )
+                return SetupError(IntegrationSetupError.CONNECTION_REFUSED)
+        else:
+            _LOG.info("No ip address entered")
+            return _MANUAL_INPUT_SCHEMA

@@ -19,25 +19,13 @@ from aiopvapi.resources.scene import Scene
 from pyee.asyncio import AsyncIOEventEmitter
 from ucapi.media_player import Attributes as MediaAttr
 from ucapi import EntityTypes
-from config import PowerviewConfig, create_entity_id
-from const import PowerviewCoverInfo, PowerviewSceneInfo
+from const import PowerviewCoverInfo, PowerviewSceneInfo, PowerviewDevice
+from ucapi.cover import Attributes as CoverAttr
+from ucapi.button import Attributes as ButtonAttr
+from ucapi_framework.device import DeviceEvents
+from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
-
-
-class EVENTS(IntEnum):
-    """Internal driver events."""
-
-    CONNECTING = 0
-    CONNECTED = 1
-    DISCONNECTED = 2
-    PAIRED = 3
-    ERROR = 4
-    UPDATE = 5
-
-
-_PowerviewDeviceT = TypeVar("_PowerviewDeviceT", bound="PowerviewConfig")
-_P = ParamSpec("_P")
 
 
 class PowerState(StrEnum):
@@ -52,12 +40,12 @@ class SmartHub:
     """Representing a Powerview Smart Hub Device."""
 
     def __init__(
-        self, config: PowerviewConfig, loop: AbstractEventLoop | None = None
+        self, config: PowerviewDevice, loop: AbstractEventLoop | None = None
     ) -> None:
         """Create instance."""
         self._loop: AbstractEventLoop = loop or asyncio.get_running_loop()
         self.events = AsyncIOEventEmitter(self._loop)
-        self._config: PowerviewConfig | None = config
+        self._config: PowerviewDevice | None = config
         self._request: AioRequest = AioRequest(
             self._config.address, self._loop, timeout=10
         )
@@ -75,7 +63,7 @@ class SmartHub:
         self.radio_operation_lock = asyncio.Lock()
 
     @property
-    def device_config(self) -> PowerviewConfig:
+    def device_config(self) -> PowerviewDevice:
         """Return the device configuration."""
         return self._config
 
@@ -142,7 +130,7 @@ class SmartHub:
             self.rebuild_request()
 
         _LOG.debug("[%s] Connecting to device", self.log_id)
-        self.events.emit(EVENTS.CONNECTING, self.device_config.identifier)
+        self.events.emit(DeviceEvents.CONNECTING, self.device_config.identifier)
 
         try:
             await self._powerview_smart_hub.query_firmware()
@@ -157,7 +145,7 @@ class SmartHub:
         finally:
             _LOG.debug("[%s] Connect setup finished", self.log_id)
 
-        self.events.emit(EVENTS.CONNECTED, self.device_config.identifier)
+        self.events.emit(DeviceEvents.CONNECTED, self.device_config.identifier)
         _LOG.debug("[%s] Connected", self.log_id)
 
         await self._update_covers()
@@ -169,7 +157,7 @@ class SmartHub:
         _LOG.debug("[%s] Disconnecting from device", self.log_id)
         self._powerview_smart_hub = None
         self._state = PowerState.OFF
-        self.events.emit(EVENTS.DISCONNECTED, self.device_config.identifier)
+        self.events.emit(DeviceEvents.DISCONNECTED, self.device_config.identifier)
 
     async def _update_covers(self) -> None:
         update = {}
@@ -178,15 +166,17 @@ class SmartHub:
 
             for cover_data in self._covers:
                 update = {}
-                update["state"] = (
+                update[CoverAttr.STATE] = (
                     "OPEN"
                     if cover_data.raw_shade.current_position.primary >= 5
                     else "CLOSED"
                 )
-                update["position"] = cover_data.raw_shade.current_position.primary
+                update[CoverAttr.POSITION] = (
+                    cover_data.raw_shade.current_position.primary
+                )
 
                 self.events.emit(
-                    EVENTS.UPDATE,
+                    DeviceEvents.UPDATE,
                     create_entity_id(
                         self.device_config.identifier,
                         cover_data.id,
@@ -200,7 +190,7 @@ class SmartHub:
 
     async def _update_scenes(self) -> None:
         update = {}
-        update["state"] = self.state
+        update[ButtonAttr.STATE] = self.state
 
         try:
             self._scenes = await self.get_scenes()
@@ -245,15 +235,6 @@ class SmartHub:
         try:
             async with self.radio_operation_lock:
                 await scene_data.raw_scene.activate()
-            self.events.emit(
-                EVENTS.UPDATE,
-                create_entity_id(
-                    self.device_config.identifier,
-                    "0",
-                    EntityTypes.MEDIA_PLAYER,
-                ),
-                {"source": scene_data.name},
-            )
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error(
                 "[%s] Error activating scene %s: %s", self.log_id, scene_data.name, err
@@ -279,13 +260,13 @@ class SmartHub:
 
                 state = "OPEN"
                 self.events.emit(
-                    EVENTS.UPDATE,
+                    DeviceEvents.UPDATE,
                     create_entity_id(
                         self._config.identifier,
                         cover_id,
                         EntityTypes.COVER,
                     ),
-                    {"state": state, "position": position},
+                    {CoverAttr.STATE: state, CoverAttr.POSITION: position},
                 )
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error("[%s] Error opening cover %s: %s", self.log_id, cover_id, err)
@@ -301,13 +282,13 @@ class SmartHub:
             async with self.radio_operation_lock:
                 await cover_data.raw_shade.close()
             self.events.emit(
-                EVENTS.UPDATE,
+                DeviceEvents.UPDATE,
                 create_entity_id(
                     self._config.identifier,
                     cover_id,
                     EntityTypes.COVER,
                 ),
-                {"state": "CLOSED", "position": 0},
+                {CoverAttr.STATE: "CLOSED", CoverAttr.POSITION: 0},
             )
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error(
@@ -325,13 +306,13 @@ class SmartHub:
             async with self.radio_operation_lock:
                 await cover_data.raw_shade.stop()
             self.events.emit(
-                EVENTS.UPDATE,
+                DeviceEvents.UPDATE,
                 create_entity_id(
                     self._config.identifier,
                     cover_id,
                     EntityTypes.COVER,
                 ),
-                {"state": "STOPPED"},
+                {CoverAttr.STATE: "STOPPED"},
             )
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error(
@@ -354,15 +335,15 @@ class SmartHub:
                 async with self.radio_operation_lock:
                     await cover_data.raw_shade.close()
             self.events.emit(
-                EVENTS.UPDATE,
+                DeviceEvents.UPDATE,
                 create_entity_id(
                     self._config.identifier,
                     cover_id,
                     EntityTypes.COVER,
                 ),
                 {
-                    "state": "OPEN" if current_position >= 5 else "CLOSED",
-                    "position": 100 if current_position == 0 else 0,
+                    CoverAttr.STATE: "OPEN" if current_position >= 5 else "CLOSED",
+                    CoverAttr.POSITION: 100 if current_position == 0 else 0,
                 },
             )
         except Exception as err:  # pylint: disable=broad-exception-caught

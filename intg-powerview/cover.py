@@ -6,42 +6,31 @@ Cover entity functions.
 
 import logging
 from typing import Any
-import asyncio
 import ucapi
-import ucapi.api as uc
-
-import powerview
-from config import PowerviewConfig, create_entity_id, entity_from_entity_id
+from powerview import SmartHub
 from ucapi import Cover, cover, EntityTypes
-from const import PowerviewCoverInfo
-
-_LOOP = asyncio.new_event_loop()
-asyncio.set_event_loop(_LOOP)
+from const import PowerviewCoverInfo, PowerviewDevice
+from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
-api = uc.IntegrationAPI(_LOOP)
-_configured_devices: dict[str, powerview.SmartHub] = {}
 
 
 class PowerviewCover(Cover):
     """Representation of a Powerview Cover entity."""
 
     def __init__(
-        self,
-        config: PowerviewConfig,
-        cover_info: PowerviewCoverInfo,
-        get_device: Any = None,
+        self, config: PowerviewDevice, cover_info: PowerviewCoverInfo, device: SmartHub
     ):
         """Initialize the class."""
         _LOG.debug("Powerview Cover init")
         entity_id = create_entity_id(
-            config.identifier, cover_info.device_id, EntityTypes.COVER
+            EntityTypes.COVER, config.identifier, cover_info.device_id
         )
         self.config = config
-        self.get_device = get_device
-        self.device: powerview.SmartHub = self.get_device(self.config.identifier)
+        self.device: SmartHub = device
         state = "UNKNOWN"
         current_position = 0
+        self._cover_id = cover_info.device_id
 
         if self.device and self.device.covers is not None:
             this_cover = next(
@@ -88,22 +77,20 @@ class PowerviewCover(Cover):
         _LOG.info(
             "Got %s command request: %s %s", entity.id, cmd_id, params if params else ""
         )
-        device: powerview.SmartHub = self.get_device(self.config.identifier)
 
         try:
             match cmd_id:
                 case cover.Commands.OPEN:
-                    await device.open_cover(cover_id=entity_from_entity_id(entity.id))
+                    await self.device.open_cover(cover_id=self._cover_id)
                 case cover.Commands.CLOSE:
-                    await device.close_cover(cover_id=entity_from_entity_id(entity.id))
+                    await self.device.close_cover(cover_id=self._cover_id)
                 case cover.Commands.STOP:
-                    await device.stop_cover(cover_id=entity_from_entity_id(entity.id))
+                    await self.device.stop_cover(cover_id=self._cover_id)
                 case cover.Commands.POSITION:
                     if params and "position" in params:
                         position = params["position"]
-                        await device.open_cover(
-                            cover_id=entity_from_entity_id(entity.id),
-                            position=position,
+                        await self.device.open_cover(
+                            cover_id=self._cover_id, position=position
                         )
         except Exception as ex:  # pylint: disable=broad-except
             _LOG.error("Error executing command %s: %s", cmd_id, ex)

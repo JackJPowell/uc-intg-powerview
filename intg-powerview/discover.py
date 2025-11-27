@@ -1,39 +1,53 @@
-"""Discovery module for Zeroconf protocol."""
+"""Discovery module for Hunter Douglas PowerView devices using mDNS/Zeroconf."""
 
-import asyncio
-from dataclasses import dataclass
-from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf, AsyncServiceInfo
-from zeroconf import ServiceStateChange, IPVersion
+from typing import Any
 
-
-@dataclass
-class ZeroconfService:
-    address: str
+from ucapi_framework.discovery import MDNSDiscovery, DiscoveredDevice
+from zeroconf import IPVersion
 
 
-class ZeroconfScanner:
-    def __init__(self, service_type="_powerview._tcp.local."):
-        self.service_type = service_type
-        self.found_services = [ZeroconfService]
+class PowerViewDiscovery(MDNSDiscovery):
+    """mDNS discovery for Hunter Douglas PowerView hubs."""
 
-    async def on_service_state_change(self, zeroconf, service_type, name, state_change):
-        if state_change is ServiceStateChange.Added:
-            info = AsyncServiceInfo(service_type, name)
-            await info.async_request(zeroconf, timeout=2000)
-            if info.parsed_addresses():
-                self.found_services.append(
-                    ZeroconfService(
-                        address=info.parsed_addresses(version=IPVersion.V4Only)[0]
-                    )
-                )
+    def __init__(self, timeout: int = 5):
+        """
+        Initialize PowerView discovery.
 
-    async def scan(self, timeout=2):
-        self.found_services = []
-        async with AsyncZeroconf() as azc:
+        :param timeout: Discovery timeout in seconds
+        """
+        super().__init__(service_type="_powerview._tcp.local.", timeout=timeout)
 
-            def handler(**kwargs):
-                asyncio.create_task(self.on_service_state_change(**kwargs))
+    def parse_mdns_service(self, service_info: Any) -> DiscoveredDevice | None:
+        """
+        Parse mDNS service info into DiscoveredDevice.
 
-            AsyncServiceBrowser(azc.zeroconf, self.service_type, handlers=[handler])
-            await asyncio.sleep(timeout)
-        return self.found_services
+        :param service_info: mDNS service info object from zeroconf
+        :return: DiscoveredDevice or None if parsing fails
+        """
+        if not service_info.parsed_addresses():
+            return None
+
+        # Get the first IPv4 address
+        addresses = service_info.parsed_addresses(version=IPVersion.V4Only)[0]
+        address = addresses[0] if addresses else None
+
+        if not address:
+            return None
+
+        # Extract name from service info (remove service suffix)
+        name = service_info.name
+        if name.endswith("._powerview._tcp.local."):
+            name = name.replace("._powerview._tcp.local.", "")
+
+        return DiscoveredDevice(
+            identifier=name,
+            name=name,
+            address=address,
+            extra_data={
+                "port": service_info.port,
+                "server": service_info.server,
+                "properties": dict(service_info.properties)
+                if service_info.properties
+                else {},
+            },
+        )

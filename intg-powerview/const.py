@@ -8,6 +8,20 @@ from aiopvapi.resources.scene import Scene
 
 
 @dataclass
+class PowerviewDevice:
+    """Powerview device configuration."""
+
+    identifier: str
+    """Unique identifier of the device. (MAC Address)"""
+    address: str
+    """IP Address of device."""
+    name: str
+    """Name of the device."""
+    model: str
+    """Model name of the device."""
+
+
+@dataclass
 class PowerviewCoverInfo:
     device_id: str
     type: str

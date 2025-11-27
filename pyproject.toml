@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiopvapi==3.2.1",
-    "ucapi==0.3.1",
+    "ucapi==0.4.0",
+    "ucapi-framework==0.1.22",
     "zeroconf>=0.147.0",
 ]
