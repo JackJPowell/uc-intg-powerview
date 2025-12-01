@@ -88,12 +88,12 @@ class PowerviewIntegrationDriver(BaseIntegrationDriver[SmartHub, PowerviewDevice
 
         try:
             # Get covers from the hub (this queries the PowerView network)
-            if device.covers is None:
+            if not device.covers:
                 await device.get_covers()
             _LOG.info("Found %d covers on PowerView network", len(device.covers))
 
             # Get scenes from the hub (this queries the PowerView network)
-            if device.scenes is None:
+            if not device.scenes:
                 await device.get_scenes()
             _LOG.info("Found %d scenes on PowerView network", len(device.scenes))
 

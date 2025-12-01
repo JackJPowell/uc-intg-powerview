@@ -137,7 +137,7 @@ class SmartHub(StatelessHTTPDevice):
 
         if self._powerview_smart_hub is None:
             self.rebuild_request()
-        super().connect()
+        await super().connect()
 
         await self._update_covers()
         await self._update_scenes()
@@ -146,7 +146,7 @@ class SmartHub(StatelessHTTPDevice):
     async def disconnect(self) -> None:
         """Disconnect from the device."""
         self._powerview_smart_hub = None
-        super().disconnect()
+        await super().disconnect()
 
     async def _update_covers(self) -> None:
         update = {}
