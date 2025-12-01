@@ -6,24 +6,22 @@ This module implements the Powerview communication of the Remote Two/3 integrati
 import asyncio
 import logging
 from asyncio import AbstractEventLoop
-from enum import StrEnum, IntEnum
-from typing import ParamSpec, TypeVar
+from enum import StrEnum
 
 from aiopvapi.helpers.aiorequest import AioRequest
 from aiopvapi.hub import Hub
-from aiopvapi.shades import Shades
+from aiopvapi.resources.scene import Scene
+from aiopvapi.resources.shade import BaseShade, ShadePosition
 from aiopvapi.scene_members import SceneMembers
 from aiopvapi.scenes import Scenes
-from aiopvapi.resources.shade import BaseShade, ShadePosition
-from aiopvapi.resources.scene import Scene
-from pyee.asyncio import AsyncIOEventEmitter
-from ucapi.media_player import Attributes as MediaAttr
+from aiopvapi.shades import Shades
+from const import PowerviewCoverInfo, PowerviewDevice, PowerviewSceneInfo
 from ucapi import EntityTypes
-from const import PowerviewCoverInfo, PowerviewSceneInfo, PowerviewDevice
-from ucapi.cover import Attributes as CoverAttr
 from ucapi.button import Attributes as ButtonAttr
+from ucapi.cover import Attributes as CoverAttr
+from ucapi.media_player import Attributes as MediaAttr
+from ucapi_framework import StatelessHTTPDevice, create_entity_id
 from ucapi_framework.device import DeviceEvents
-from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
 
@@ -36,26 +34,25 @@ class PowerState(StrEnum):
     STANDBY = "STANDBY"
 
 
-class SmartHub:
+class SmartHub(StatelessHTTPDevice):
     """Representing a Powerview Smart Hub Device."""
 
     def __init__(
-        self, config: PowerviewDevice, loop: AbstractEventLoop | None = None
+        self,
+        config: PowerviewDevice,
+        loop: AbstractEventLoop | None = None,
+        config_manager=None,
     ) -> None:
         """Create instance."""
-        self._loop: AbstractEventLoop = loop or asyncio.get_running_loop()
-        self.events = AsyncIOEventEmitter(self._loop)
-        self._config: PowerviewDevice | None = config
+        super().__init__(config, loop, config_manager)
         self._request: AioRequest = AioRequest(
-            self._config.address, self._loop, timeout=10
+            self._device_config.address, self._loop, timeout=10
         )
         self._powerview_smart_hub: Hub = Hub(self._request)
         self._cover_entry_point: Shades = Shades(self._request)
         self._scene_entry_point: Scenes = Scenes(self._request)
         self._scene_member_entry_point: SceneMembers = SceneMembers(self._request)
-        self._connection_attempts: int = 0
         self._state: PowerState = PowerState.OFF
-        self._features: dict = {}
         self._covers: list[PowerviewCoverInfo] = []
         self._scenes: list[PowerviewSceneInfo] = []
         self._raw_covers: list[BaseShade] = []
@@ -65,12 +62,12 @@ class SmartHub:
     @property
     def device_config(self) -> PowerviewDevice:
         """Return the device configuration."""
-        return self._config
+        return self._device_config
 
     @property
     def identifier(self) -> str:
         """Return the device identifier."""
-        return self._config.identifier
+        return self._device_config.identifier
 
     @property
     def log_id(self) -> str:
@@ -117,25 +114,15 @@ class SmartHub:
 
     def rebuild_request(self) -> None:
         """Rebuild the request object."""
-        self._request = AioRequest(self._config.address, self._loop, timeout=10)
+        self._request = AioRequest(self._device_config.address, self._loop, timeout=10)
         self._powerview_smart_hub = Hub(self._request)
         self._cover_entry_point = Shades(self._request)
         self._scene_entry_point = Scenes(self._request)
         self._scene_member_entry_point = SceneMembers(self._request)
 
-    async def connect(self) -> bool:
-        """Establish connection to the Powerview device."""
-
-        if self._powerview_smart_hub is None:
-            self.rebuild_request()
-
-        _LOG.debug("[%s] Connecting to device", self.log_id)
-        self.events.emit(DeviceEvents.CONNECTING, self.device_config.identifier)
-
+    async def verify_connection(self):
         try:
             await self._powerview_smart_hub.query_firmware()
-            self._state = PowerState.ON
-            _LOG.info("[%s] Connected to device", self.log_id)
         except asyncio.CancelledError as err:
             _LOG.error("[%s] Connection cancelled: %s", self.log_id, err)
             return False
@@ -145,8 +132,12 @@ class SmartHub:
         finally:
             _LOG.debug("[%s] Connect setup finished", self.log_id)
 
-        self.events.emit(DeviceEvents.CONNECTED, self.device_config.identifier)
-        _LOG.debug("[%s] Connected", self.log_id)
+    async def connect(self) -> bool:
+        """Establish connection to the Powerview device."""
+
+        if self._powerview_smart_hub is None:
+            self.rebuild_request()
+        super().connect()
 
         await self._update_covers()
         await self._update_scenes()
@@ -154,10 +145,8 @@ class SmartHub:
 
     async def disconnect(self) -> None:
         """Disconnect from the device."""
-        _LOG.debug("[%s] Disconnecting from device", self.log_id)
         self._powerview_smart_hub = None
-        self._state = PowerState.OFF
-        self.events.emit(DeviceEvents.DISCONNECTED, self.device_config.identifier)
+        super().disconnect()
 
     async def _update_covers(self) -> None:
         update = {}
@@ -178,9 +167,9 @@ class SmartHub:
                 self.events.emit(
                     DeviceEvents.UPDATE,
                     create_entity_id(
+                        EntityTypes.COVER,
                         self.device_config.identifier,
                         cover_data.id,
-                        EntityTypes.COVER,
                     ),
                     update,
                 )
@@ -262,9 +251,9 @@ class SmartHub:
                 self.events.emit(
                     DeviceEvents.UPDATE,
                     create_entity_id(
-                        self._config.identifier,
-                        cover_id,
                         EntityTypes.COVER,
+                        self._device_config.identifier,
+                        cover_id,
                     ),
                     {CoverAttr.STATE: state, CoverAttr.POSITION: position},
                 )
@@ -284,9 +273,9 @@ class SmartHub:
             self.events.emit(
                 DeviceEvents.UPDATE,
                 create_entity_id(
-                    self._config.identifier,
-                    cover_id,
                     EntityTypes.COVER,
+                    self._device_config.identifier,
+                    cover_id,
                 ),
                 {CoverAttr.STATE: "CLOSED", CoverAttr.POSITION: 0},
             )
@@ -308,9 +297,9 @@ class SmartHub:
             self.events.emit(
                 DeviceEvents.UPDATE,
                 create_entity_id(
-                    self._config.identifier,
-                    cover_id,
                     EntityTypes.COVER,
+                    self._device_config.identifier,
+                    cover_id,
                 ),
                 {CoverAttr.STATE: "STOPPED"},
             )
@@ -337,9 +326,9 @@ class SmartHub:
             self.events.emit(
                 DeviceEvents.UPDATE,
                 create_entity_id(
-                    self._config.identifier,
-                    cover_id,
                     EntityTypes.COVER,
+                    self._device_config.identifier,
+                    cover_id,
                 ),
                 {
                     CoverAttr.STATE: "OPEN" if current_position >= 5 else "CLOSED",

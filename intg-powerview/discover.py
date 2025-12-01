@@ -2,20 +2,13 @@
 
 from typing import Any
 
-from ucapi_framework.discovery import MDNSDiscovery, DiscoveredDevice
+from ucapi_framework import DiscoveredDevice
+from ucapi_framework.discovery import MDNSDiscovery
 from zeroconf import IPVersion
 
 
-class PowerViewDiscovery(MDNSDiscovery):
+class PowerviewDiscovery(MDNSDiscovery):
     """mDNS discovery for Hunter Douglas PowerView hubs."""
-
-    def __init__(self, timeout: int = 5):
-        """
-        Initialize PowerView discovery.
-
-        :param timeout: Discovery timeout in seconds
-        """
-        super().__init__(service_type="_powerview._tcp.local.", timeout=timeout)
 
     def parse_mdns_service(self, service_info: Any) -> DiscoveredDevice | None:
         """
@@ -28,7 +21,7 @@ class PowerViewDiscovery(MDNSDiscovery):
             return None
 
         # Get the first IPv4 address
-        addresses = service_info.parsed_addresses(version=IPVersion.V4Only)[0]
+        addresses = service_info.parsed_addresses(version=IPVersion.V4Only)
         address = addresses[0] if addresses else None
 
         if not address:

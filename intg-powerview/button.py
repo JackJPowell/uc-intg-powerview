@@ -6,10 +6,11 @@ Button entity functions.
 
 import logging
 from typing import Any
+
 import ucapi
-from ucapi import Button, button, EntityTypes
-from const import PowerviewSceneInfo, PowerviewDevice
+from const import PowerviewDevice, PowerviewSceneInfo
 from powerview import SmartHub
+from ucapi import Button, EntityTypes, button
 from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
@@ -26,15 +27,14 @@ class PowerviewButton(Button):
     ):
         """Initialize the class."""
         _LOG.debug("Powerview Button init")
-        entity_id = create_entity_id(
-            EntityTypes.BUTTON, config.identifier, scene_info.scene_id
-        )
         self._scene_id = scene_info.scene_id
         self.config = config
-        self.device: SmartHub = device
+        self.device = device
 
         super().__init__(
-            entity_id,
+            create_entity_id(
+                EntityTypes.BUTTON, config.identifier, scene_info.scene_id
+            ),
             scene_info.name,
             cmd_handler=self.button_cmd_handler,
         )

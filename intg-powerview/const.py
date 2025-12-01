@@ -3,8 +3,9 @@ This module implements the Powerview constants for the Remote Two/3 integration 
 """
 
 from dataclasses import dataclass
-from aiopvapi.resources.shade import BaseShade
+
 from aiopvapi.resources.scene import Scene
+from aiopvapi.resources.shade import BaseShade
 
 
 @dataclass

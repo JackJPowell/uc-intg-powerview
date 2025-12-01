@@ -6,10 +6,11 @@ Cover entity functions.
 
 import logging
 from typing import Any
+
 import ucapi
-from powerview import SmartHub
-from ucapi import Cover, cover, EntityTypes
 from const import PowerviewCoverInfo, PowerviewDevice
+from powerview import SmartHub
+from ucapi import Cover, EntityTypes, cover
 from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
@@ -23,9 +24,6 @@ class PowerviewCover(Cover):
     ):
         """Initialize the class."""
         _LOG.debug("Powerview Cover init")
-        entity_id = create_entity_id(
-            EntityTypes.COVER, config.identifier, cover_info.device_id
-        )
         self.config = config
         self.device: SmartHub = device
         state = "UNKNOWN"
@@ -45,7 +43,9 @@ class PowerviewCover(Cover):
             state = "OPEN" if current_position >= 5 else "CLOSED"
 
         super().__init__(
-            entity_id,
+            create_entity_id(
+                EntityTypes.COVER, config.identifier, cover_info.device_id
+            ),
             cover_info.name,
             features=[
                 cover.Features.OPEN,

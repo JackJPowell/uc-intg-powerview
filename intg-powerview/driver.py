@@ -13,14 +13,15 @@ import os
 from button import PowerviewButton
 from const import PowerviewDevice
 from cover import PowerviewCover
+from discover import PowerviewDiscovery
 from powerview import SmartHub
 from setup import PowerviewSetupFlow
 from ucapi import EntityTypes
 from ucapi.button import Attributes as ButtonAttr
 from ucapi.cover import Attributes as CoverAttr
-from ucapi_framework import BaseDeviceManager, BaseIntegrationDriver
+from ucapi_framework import BaseDeviceManager, BaseIntegrationDriver, get_config_path
 
-_LOG = logging.getLogger("driver")  # avoid having __main__ in log messages
+_LOG = logging.getLogger("driver")
 
 
 class PowerviewIntegrationDriver(BaseIntegrationDriver[SmartHub, PowerviewDevice]):
@@ -158,7 +159,7 @@ async def main():
     )
     # Initialize configuration manager with device callbacks
     driver.config = BaseDeviceManager(
-        driver.api.config_dir_path,
+        get_config_path(driver.api.config_dir_path),
         driver.on_device_added,
         driver.on_device_removed,
         device_class=PowerviewDevice,
@@ -168,13 +169,13 @@ async def main():
     for device_config in list(driver.config.all()):
         await driver.async_add_configured_device(device_config)
 
-    setup_handler = PowerviewSetupFlow.create_handler(driver.config)
+    discovery = PowerviewDiscovery(service_type="_powerview._tcp.local.", timeout=2)
+
+    setup_handler = PowerviewSetupFlow.create_handler(driver.config, discovery)
 
     await driver.api.init("driver.json", setup_handler)
 
-    # Keep the driver running
-    while True:
-        await asyncio.sleep(3600)  # Sleep for an hour at a time
+    await asyncio.Future()
 
 
 if __name__ == "__main__":

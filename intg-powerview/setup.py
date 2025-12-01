@@ -5,9 +5,10 @@
 import logging
 from ipaddress import ip_address
 from typing import Any
-from const import PowerviewDevice
+
 from aiopvapi.helpers.aiorequest import AioRequest
 from aiopvapi.hub import Hub
+from const import PowerviewDevice
 from ucapi import IntegrationSetupError, RequestUserInput, SetupError
 from ucapi_framework import BaseSetupFlow
 
