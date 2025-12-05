@@ -6,21 +6,14 @@ Button entity functions.
 
 import logging
 from typing import Any
-import asyncio
+
 import ucapi
-import ucapi.api as uc
-
-import powerview
-from config import PowerviewConfig, create_entity_id, entity_from_entity_id
-from ucapi import Button, button, EntityTypes
-from const import PowerviewSceneInfo
-
-_LOOP = asyncio.new_event_loop()
-asyncio.set_event_loop(_LOOP)
+from const import PowerviewConfig, PowerviewSceneInfo
+from powerview import SmartHub
+from ucapi import Button, EntityTypes, button
+from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
-api = uc.IntegrationAPI(_LOOP)
-_configured_devices: dict[str, powerview.SmartHub] = {}
 
 
 class PowerviewButton(Button):
@@ -30,19 +23,18 @@ class PowerviewButton(Button):
         self,
         config: PowerviewConfig,
         scene_info: PowerviewSceneInfo,
-        get_device: Any = None,
+        device: SmartHub,
     ):
         """Initialize the class."""
         _LOG.debug("Powerview Button init")
-        entity_id = create_entity_id(
-            config.identifier, scene_info.scene_id, EntityTypes.BUTTON
-        )
+        self._scene_id = scene_info.scene_id
         self.config = config
-        self.get_device = get_device
-        self.device: powerview.SmartHub = self.get_device(self.config.identifier)
+        self.device = device
 
         super().__init__(
-            entity_id,
+            create_entity_id(
+                EntityTypes.BUTTON, config.identifier, scene_info.scene_id
+            ),
             scene_info.name,
             cmd_handler=self.button_cmd_handler,
         )
@@ -63,14 +55,11 @@ class PowerviewButton(Button):
         _LOG.info(
             "Got %s command request: %s %s", entity.id, cmd_id, params if params else ""
         )
-        device = self.get_device(self.config.identifier)
 
         try:
             match cmd_id:
                 case button.Commands.PUSH:
-                    await device.activate_scene(
-                        scene_id=entity_from_entity_id(entity.id)
-                    )
+                    await self.device.activate_scene(scene_id=self._scene_id)
 
         except Exception as ex:  # pylint: disable=broad-except
             _LOG.error("Error executing command %s: %s", cmd_id, ex)
