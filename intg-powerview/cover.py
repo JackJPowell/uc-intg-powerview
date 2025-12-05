@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 import ucapi
-from const import PowerviewCoverInfo, PowerviewDevice
+from const import PowerviewCoverInfo, PowerviewConfig
 from powerview import SmartHub
 from ucapi import Cover, EntityTypes, cover
 from ucapi_framework import create_entity_id
@@ -20,7 +20,7 @@ class PowerviewCover(Cover):
     """Representation of a Powerview Cover entity."""
 
     def __init__(
-        self, config: PowerviewDevice, cover_info: PowerviewCoverInfo, device: SmartHub
+        self, config: PowerviewConfig, cover_info: PowerviewCoverInfo, device: SmartHub
     ):
         """Initialize the class."""
         _LOG.debug("Powerview Cover init")

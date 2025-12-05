@@ -8,7 +8,7 @@ from typing import Any
 
 from aiopvapi.helpers.aiorequest import AioRequest
 from aiopvapi.hub import Hub
-from const import PowerviewDevice
+from const import PowerviewConfig
 from ucapi import IntegrationSetupError, RequestUserInput, SetupError
 from ucapi_framework import BaseSetupFlow
 
@@ -43,11 +43,11 @@ _MANUAL_INPUT_SCHEMA = RequestUserInput(
 )
 
 
-class PowerviewSetupFlow(BaseSetupFlow[PowerviewDevice]):
+class PowerviewSetupFlow(BaseSetupFlow[PowerviewConfig]):
     """
     Setup flow for PowerView integration.
 
-    Handles PowerView device configuration through SSDP discovery or manual entry.
+    Handles PowerView device configuration through mDNS/Zeroconf discovery or manual entry.
     """
 
     def get_manual_entry_form(self) -> RequestUserInput:
@@ -60,8 +60,8 @@ class PowerviewSetupFlow(BaseSetupFlow[PowerviewDevice]):
 
     async def query_device(
         self, input_values: dict[str, Any]
-    ) -> PowerviewDevice | SetupError | RequestUserInput:
-        address = input_values["address"]
+    ) -> PowerviewConfig | SetupError | RequestUserInput:
+        address = input_values.get("address", "")
 
         if address != "":
             # Check if input is a valid ipv4 or ipv6 address
@@ -86,7 +86,7 @@ class PowerviewSetupFlow(BaseSetupFlow[PowerviewDevice]):
                     _LOG.error("Unable to query the Powerview Device: %s", ex)
                     return SetupError(IntegrationSetupError.NOT_FOUND)
 
-                return PowerviewDevice(
+                return PowerviewConfig(
                     identifier=hub.serial_number,
                     address=address,
                     name=hub.hub_name,

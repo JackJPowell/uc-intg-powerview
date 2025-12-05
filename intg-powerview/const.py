@@ -9,7 +9,7 @@ from aiopvapi.resources.shade import BaseShade
 
 
 @dataclass
-class PowerviewDevice:
+class PowerviewConfig:
     """Powerview device configuration."""
 
     identifier: str

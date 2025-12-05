@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 import ucapi
-from const import PowerviewDevice, PowerviewSceneInfo
+from const import PowerviewConfig, PowerviewSceneInfo
 from powerview import SmartHub
 from ucapi import Button, EntityTypes, button
 from ucapi_framework import create_entity_id
@@ -21,7 +21,7 @@ class PowerviewButton(Button):
 
     def __init__(
         self,
-        config: PowerviewDevice,
+        config: PowerviewConfig,
         scene_info: PowerviewSceneInfo,
         device: SmartHub,
     ):

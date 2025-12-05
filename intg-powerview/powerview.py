@@ -15,7 +15,7 @@ from aiopvapi.resources.shade import BaseShade, ShadePosition
 from aiopvapi.scene_members import SceneMembers
 from aiopvapi.scenes import Scenes
 from aiopvapi.shades import Shades
-from const import PowerviewCoverInfo, PowerviewDevice, PowerviewSceneInfo
+from const import PowerviewCoverInfo, PowerviewConfig, PowerviewSceneInfo
 from ucapi import EntityTypes
 from ucapi.button import Attributes as ButtonAttr
 from ucapi.cover import Attributes as CoverAttr
@@ -39,7 +39,7 @@ class SmartHub(StatelessHTTPDevice):
 
     def __init__(
         self,
-        config: PowerviewDevice,
+        config: PowerviewConfig,
         loop: AbstractEventLoop | None = None,
         config_manager=None,
     ) -> None:
@@ -60,7 +60,7 @@ class SmartHub(StatelessHTTPDevice):
         self.radio_operation_lock = asyncio.Lock()
 
     @property
-    def device_config(self) -> PowerviewDevice:
+    def device_config(self) -> PowerviewConfig:
         """Return the device configuration."""
         return self._device_config
 
