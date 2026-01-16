@@ -11,12 +11,12 @@ import ucapi
 from const import PowerviewCoverInfo, PowerviewConfig
 from powerview import SmartHub
 from ucapi import Cover, EntityTypes, cover
-from ucapi_framework import create_entity_id
+from ucapi_framework import create_entity_id, Entity
 
 _LOG = logging.getLogger(__name__)
 
 
-class PowerviewCover(Cover):
+class PowerviewCover(Cover, Entity):
     """Representation of a Powerview Cover entity."""
 
     def __init__(
@@ -26,8 +26,8 @@ class PowerviewCover(Cover):
         _LOG.debug("Powerview Cover init")
         self.config = config
         self.device: SmartHub = device
-        state = "UNKNOWN"
-        current_position = 0
+        self.state = "UNKNOWN"
+        self.current_position: int = 0
         self._cover_id = cover_info.device_id
 
         if self.device and self.device.covers is not None:
@@ -39,8 +39,8 @@ class PowerviewCover(Cover):
             this_cover = cover_info
 
         if this_cover is not None:
-            current_position = this_cover.raw_shade.current_position.primary
-            state = "OPEN" if current_position >= 5 else "CLOSED"
+            self.current_position: int = this_cover.raw_shade.current_position.primary
+            self.state = "OPEN" if self.current_position >= 5 else "CLOSED"
 
         super().__init__(
             create_entity_id(
@@ -54,15 +54,19 @@ class PowerviewCover(Cover):
                 cover.Features.POSITION,
             ],
             attributes={
-                cover.Attributes.STATE: state,
-                cover.Attributes.POSITION: 100 if current_position == 0 else 0,
+                cover.Attributes.STATE: self.state,
+                cover.Attributes.POSITION: 100 if self.current_position == 0 else 0,
             },
             device_class=cover.DeviceClasses.SHADE,
             cmd_handler=self.cover_cmd_handler,
         )
 
     async def cover_cmd_handler(
-        self, entity: Cover, cmd_id: str, params: dict[str, Any] | None
+        self,
+        entity: Cover,
+        cmd_id: str,
+        params: dict[str, Any] | None,
+        _: Any | None = None,
     ) -> ucapi.StatusCodes:
         """
         Cover entity command handler.
@@ -92,6 +96,11 @@ class PowerviewCover(Cover):
                         await self.device.open_cover(
                             cover_id=self._cover_id, position=position
                         )
+
+            # Get updated attributes from device and update entity
+            if entity.id in self.device.cover_attributes:
+                self.update(self.device.cover_attributes[entity.id])
+
         except Exception as ex:  # pylint: disable=broad-except
             _LOG.error("Error executing command %s: %s", cmd_id, ex)
             return ucapi.StatusCodes.BAD_REQUEST

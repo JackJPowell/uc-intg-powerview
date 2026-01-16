@@ -14,34 +14,6 @@ from ucapi_framework import BaseSetupFlow
 
 _LOG = logging.getLogger(__name__)
 
-_MANUAL_INPUT_SCHEMA = RequestUserInput(
-    {"en": "Hunter Douglas Powerview Setup"},
-    [
-        {
-            "id": "info",
-            "label": {
-                "en": "Setup your Hunter Douglas Powerview Device",
-            },
-            "field": {
-                "label": {
-                    "value": {
-                        "en": (
-                            "Please supply the IP address of your Hunter Douglas Powerview Device."
-                        ),
-                    }
-                }
-            },
-        },
-        {
-            "field": {"text": {"value": ""}},
-            "id": "address",
-            "label": {
-                "en": "IP Address",
-            },
-        },
-    ],
-)
-
 
 class PowerviewSetupFlow(BaseSetupFlow[PowerviewConfig]):
     """
@@ -56,7 +28,33 @@ class PowerviewSetupFlow(BaseSetupFlow[PowerviewConfig]):
 
         :return: RequestUserInput with form fields for manual configuration
         """
-        return _MANUAL_INPUT_SCHEMA
+        return RequestUserInput(
+            {"en": "Hunter Douglas Powerview Setup"},
+            [
+                {
+                    "id": "info",
+                    "label": {
+                        "en": "Setup your Hunter Douglas Powerview Device",
+                    },
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": (
+                                    "Please supply the IP address of your Hunter Douglas Powerview Device."
+                                ),
+                            }
+                        }
+                    },
+                },
+                {
+                    "field": {"text": {"value": ""}},
+                    "id": "address",
+                    "label": {
+                        "en": "IP Address",
+                    },
+                },
+            ],
+        )
 
     async def query_device(
         self, input_values: dict[str, Any]
@@ -69,7 +67,7 @@ class PowerviewSetupFlow(BaseSetupFlow[PowerviewConfig]):
                 ip_address(address)
             except ValueError:
                 _LOG.error("The entered ip address %s is not valid", address)
-                return _MANUAL_INPUT_SCHEMA
+                return self.get_manual_entry_form()
 
             _LOG.info("Entered ip address: %s", address)
 
@@ -101,4 +99,4 @@ class PowerviewSetupFlow(BaseSetupFlow[PowerviewConfig]):
                 return SetupError(IntegrationSetupError.CONNECTION_REFUSED)
         else:
             _LOG.info("No ip address entered")
-            return _MANUAL_INPUT_SCHEMA
+            return self.get_manual_entry_form()
