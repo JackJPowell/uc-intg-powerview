@@ -99,7 +99,7 @@ class PowerviewCover(Cover, Entity):
 
             # Get updated attributes from device and update entity
             if entity.id in self.device.cover_attributes:
-                self.update(self.device.cover_attributes[entity.id])
+                self.update(self.device.get_device_attributes(entity.id))
 
         except Exception as ex:  # pylint: disable=broad-except
             _LOG.error("Error executing command %s: %s", cmd_id, ex)
