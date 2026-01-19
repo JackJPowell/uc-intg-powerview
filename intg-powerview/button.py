@@ -11,12 +11,12 @@ import ucapi
 from const import PowerviewConfig, PowerviewSceneInfo
 from powerview import SmartHub
 from ucapi import Button, EntityTypes, button
-from ucapi_framework import create_entity_id
+from ucapi_framework import create_entity_id, Entity
 
 _LOG = logging.getLogger(__name__)
 
 
-class PowerviewButton(Button):
+class PowerviewButton(Button, Entity):
     """Representation of a Powerview Button entity."""
 
     def __init__(
@@ -40,7 +40,7 @@ class PowerviewButton(Button):
         )
 
     async def button_cmd_handler(
-        self, entity: Button, cmd_id: str, params: dict[str, Any] | None
+        self, entity: Button, cmd_id: str, params: dict[str, Any] | None, _: Any | None = None
     ) -> ucapi.StatusCodes:
         """
         Button entity command handler.
@@ -60,6 +60,10 @@ class PowerviewButton(Button):
             match cmd_id:
                 case button.Commands.PUSH:
                     await self.device.activate_scene(scene_id=self._scene_id)
+            
+            # Get updated attributes from device and update entity
+            if entity.id in self.device.button_attributes:
+                self.update(self.device.button_attributes[entity.id])
 
         except Exception as ex:  # pylint: disable=broad-except
             _LOG.error("Error executing command %s: %s", cmd_id, ex)
