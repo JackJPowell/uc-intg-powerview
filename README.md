@@ -1,7 +1,7 @@
 [![Discord](https://badgen.net/discord/online-members/zGVYf58)](https://discord.gg/zGVYf58)
 ![GitHub Release](https://img.shields.io/github/v/release/jackjpowell/uc-intg-powerview)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/jackjpowell/uc-intg-powerview/total)
-![Maintenance](https://img.shields.io/maintenance/yes/2025.svg)
+![Maintenance](https://img.shields.io/maintenance/yes/2026.svg)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee☕-FFDD00?logo=buy-me-a-coffee&logoColor=white&labelColor=grey)](https://buymeacoffee.com/jackpowell)
 
 # Hunter Douglas PowerView Integration for Unfolded Circle Remotes
