@@ -25,6 +25,7 @@ from ucapi_framework import (
     CoverAttributes,
     ButtonAttributes,
     create_entity_id,
+    BaseIntegrationDriver,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -46,9 +47,10 @@ class SmartHub(StatelessHTTPDevice):
         config: PowerviewConfig,
         loop: AbstractEventLoop | None = None,
         config_manager=None,
+        driver: BaseIntegrationDriver | None = None,
     ) -> None:
         """Create instance."""
-        super().__init__(config, loop, config_manager)
+        super().__init__(config, loop, config_manager, driver=driver)
         self._request: AioRequest = AioRequest(
             self._device_config.address, self._loop, timeout=10
         )
@@ -173,7 +175,7 @@ class SmartHub(StatelessHTTPDevice):
 
     async def disconnect(self) -> None:
         """Disconnect from the device."""
-        self._powerview_smart_hub = None
+        self._powerview_smart_hub = None  # ty:ignore[invalid-assignment]
         await super().disconnect()
 
     async def _update_covers(self) -> None:
@@ -190,7 +192,7 @@ class SmartHub(StatelessHTTPDevice):
                 # Create or update the attributes for this cover
                 self._cover_attributes[entity_id] = CoverAttributes(
                     STATE=CoverStates.OPEN
-                    if cover_data.raw_shade.current_position.primary >= 5
+                    if cover_data.raw_shade.current_position.primary >= 5  # ty:ignore[unsupported-operator]
                     else CoverStates.CLOSED,
                     POSITION=int(cover_data.raw_shade.current_position.primary)
                     if cover_data.raw_shade.current_position.primary is not None
@@ -220,7 +222,7 @@ class SmartHub(StatelessHTTPDevice):
 
     async def get_covers(self) -> list[PowerviewCoverInfo]:
         """Return the list of cover entities."""
-        self._raw_covers = await self._cover_entry_point.get_instances()
+        self._raw_covers = await self._cover_entry_point.get_instances()  # ty:ignore[invalid-assignment]
 
         # Wrap raw covers in PowerviewCoverInfo for consistent interface
         self._covers = [
@@ -228,7 +230,7 @@ class SmartHub(StatelessHTTPDevice):
                 device_id=str(shade.id),
                 type=str(getattr(shade, "type", "shade")),
                 name=shade.name,
-                position=shade.current_position.primary,
+                position=shade.current_position.primary,  # ty:ignore[invalid-argument-type]
                 raw_shade=shade,
             )
             for shade in self._raw_covers
@@ -237,7 +239,7 @@ class SmartHub(StatelessHTTPDevice):
 
     async def get_scenes(self) -> list[PowerviewSceneInfo]:
         """Return the list of scene entities."""
-        self._raw_scenes = await self._scene_entry_point.get_instances()
+        self._raw_scenes = await self._scene_entry_point.get_instances()  # ty:ignore[invalid-assignment]
 
         # Wrap raw scenes in PowerviewSceneInfo for consistent interface
         self._scenes = [

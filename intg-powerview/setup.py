@@ -85,10 +85,10 @@ class PowerviewSetupFlow(BaseSetupFlow[PowerviewConfig]):
                     return SetupError(IntegrationSetupError.NOT_FOUND)
 
                 return PowerviewConfig(
-                    identifier=hub.serial_number,
+                    identifier=hub.serial_number,  # ty:ignore[invalid-argument-type]
                     address=address,
-                    name=hub.hub_name,
-                    model=hub.model,
+                    name=hub.hub_name,  # ty:ignore[invalid-argument-type]
+                    model=hub.model,  # ty:ignore[invalid-argument-type]
                 )
 
             except Exception as ex:  # pylint: disable=broad-exception-caught
