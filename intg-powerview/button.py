@@ -10,13 +10,13 @@ from typing import Any
 import ucapi
 from const import PowerviewConfig, PowerviewSceneInfo
 from powerview import SmartHub
-from ucapi import Button, EntityTypes, button
-from ucapi_framework import create_entity_id, Entity
+from ucapi import EntityTypes, button
+from ucapi_framework import create_entity_id, ButtonEntity
 
 _LOG = logging.getLogger(__name__)
 
 
-class PowerviewButton(Button, Entity):
+class PowerviewButton(ButtonEntity):
     """Representation of a Powerview Button entity."""
 
     def __init__(
@@ -27,9 +27,8 @@ class PowerviewButton(Button, Entity):
     ):
         """Initialize the class."""
         _LOG.debug("Powerview Button init")
+        self._device = device
         self._scene_id = scene_info.scene_id
-        self.config = config
-        self.device = device
 
         super().__init__(
             create_entity_id(
@@ -39,8 +38,23 @@ class PowerviewButton(Button, Entity):
             cmd_handler=self.button_cmd_handler,
         )
 
+        if device:
+            self.subscribe_to_device(device)
+
+    async def sync_state(self) -> None:
+        """Sync button state from device to Remote."""
+        if self._device is None:
+            return
+        attrs = self._device.get_button_attributes(self._scene_id)
+        if attrs is not None:
+            self.update(attrs)
+
     async def button_cmd_handler(
-        self, entity: Button, cmd_id: str, params: dict[str, Any] | None, _: Any | None = None
+        self,
+        entity: button.Button,
+        cmd_id: str,
+        params: dict[str, Any] | None,
+        _: Any | None = None,
     ) -> ucapi.StatusCodes:
         """
         Button entity command handler.
@@ -52,6 +66,9 @@ class PowerviewButton(Button, Entity):
         :param params: optional command parameters
         :return: status code of the command. StatusCodes.OK if the command succeeded.
         """
+        if self._device is None:
+            return ucapi.StatusCodes.SERVICE_UNAVAILABLE
+
         _LOG.info(
             "Got %s command request: %s %s", entity.id, cmd_id, params if params else ""
         )
@@ -59,11 +76,7 @@ class PowerviewButton(Button, Entity):
         try:
             match cmd_id:
                 case button.Commands.PUSH:
-                    await self.device.activate_scene(scene_id=self._scene_id)
-            
-            # Get updated attributes from device and update entity
-            if entity.id in self.device.button_attributes:
-                self.update(self.device.button_attributes[entity.id])
+                    await self._device.activate_scene(scene_id=self._scene_id)
 
         except Exception as ex:  # pylint: disable=broad-except
             _LOG.error("Error executing command %s: %s", cmd_id, ex)

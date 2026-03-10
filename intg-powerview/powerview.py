@@ -7,7 +7,6 @@ import asyncio
 import logging
 from asyncio import AbstractEventLoop
 from enum import StrEnum
-from typing import Any
 
 from aiopvapi.helpers.aiorequest import AioRequest
 from aiopvapi.hub import Hub
@@ -17,14 +16,12 @@ from aiopvapi.scene_members import SceneMembers
 from aiopvapi.scenes import Scenes
 from aiopvapi.shades import Shades
 from const import PowerviewCoverInfo, PowerviewConfig, PowerviewSceneInfo
-from ucapi import EntityTypes
 from ucapi.cover import States as CoverStates
 from ucapi.button import States as ButtonStates
 from ucapi_framework import (
     StatelessHTTPDevice,
     CoverAttributes,
     ButtonAttributes,
-    create_entity_id,
     BaseIntegrationDriver,
 )
 
@@ -64,7 +61,7 @@ class SmartHub(StatelessHTTPDevice):
         self._raw_covers: list[BaseShade] = []
         self._raw_scenes: list[Scene] = []
         self.radio_operation_lock = asyncio.Lock()
-        # Attribute storage for entities
+        # Attribute storage keyed by device_id (str), NOT entity_id
         self._cover_attributes: dict[str, CoverAttributes] = {}
         self._button_attributes: dict[str, ButtonAttributes] = {}
 
@@ -113,34 +110,13 @@ class SmartHub(StatelessHTTPDevice):
         """Return the list of scene entities."""
         return self._scenes
 
-    @property
-    def cover_attributes(self) -> dict[str, CoverAttributes]:
-        """Return the cover attributes dictionary."""
-        return self._cover_attributes
+    def get_cover_attributes(self, device_id: str) -> CoverAttributes | None:
+        """Return cover attributes for the given device_id."""
+        return self._cover_attributes.get(device_id)
 
-    @property
-    def button_attributes(self) -> dict[str, ButtonAttributes]:
-        """Return the button attributes dictionary."""
-        return self._button_attributes
-
-    def get_device_attributes(
-        self, entity_id: str
-    ) -> dict[str, Any] | CoverAttributes | ButtonAttributes:
-        """
-        Provide entity-specific attributes for the given entity.
-
-        :param entity_id: Entity identifier to get attributes for
-        :return: Dictionary of entity attributes or dataclass instance
-        """
-        # Check if it's a cover entity
-        if entity_id in self.cover_attributes:
-            return self.cover_attributes[entity_id]
-
-        # Check if it's a button entity
-        if entity_id in self.button_attributes:
-            return self.button_attributes[entity_id]
-
-        return {}
+    def get_button_attributes(self, device_id: str) -> ButtonAttributes | None:
+        """Return button attributes for the given device_id."""
+        return self._button_attributes.get(device_id)
 
     def rebuild_request(self) -> None:
         """Rebuild the request object."""
@@ -164,7 +140,6 @@ class SmartHub(StatelessHTTPDevice):
 
     async def connect(self) -> bool:
         """Establish connection to the Powerview device."""
-
         if self._powerview_smart_hub is None:
             self.rebuild_request()
         await super().connect()
@@ -183,21 +158,21 @@ class SmartHub(StatelessHTTPDevice):
             await self.get_covers()
 
             for cover_data in self._covers:
-                entity_id = create_entity_id(
-                    EntityTypes.COVER,
-                    self.device_config.identifier,
-                    cover_data.id,
+                raw_shade = cover_data.raw_shade
+                if raw_shade is not None and raw_shade.current_position is not None:
+                    primary = raw_shade.current_position.primary
+                    position = int(primary) if primary is not None else 0
+                    state = CoverStates.OPEN if position >= 5 else CoverStates.CLOSED
+                else:
+                    position = 0
+                    state = CoverStates.CLOSED
+
+                self._cover_attributes[cover_data.device_id] = CoverAttributes(
+                    STATE=state,
+                    POSITION=position,
                 )
 
-                # Create or update the attributes for this cover
-                self._cover_attributes[entity_id] = CoverAttributes(
-                    STATE=CoverStates.OPEN
-                    if cover_data.raw_shade.current_position.primary >= 5  # ty:ignore[unsupported-operator]
-                    else CoverStates.CLOSED,
-                    POSITION=int(cover_data.raw_shade.current_position.primary)
-                    if cover_data.raw_shade.current_position.primary is not None
-                    else 0,
-                )
+            self.push_update()
 
         except Exception:  # pylint: disable=broad-exception-caught
             _LOG.exception("[%s] Cover update: protocol error", self.log_id)
@@ -206,16 +181,12 @@ class SmartHub(StatelessHTTPDevice):
         try:
             self._scenes = await self.get_scenes()
 
-            # Initialize attributes for all scenes/buttons
             for scene_data in self._scenes:
-                entity_id = create_entity_id(
-                    EntityTypes.BUTTON,
-                    self.device_config.identifier,
-                    scene_data.id,
-                )
-                self._button_attributes[entity_id] = ButtonAttributes(
+                self._button_attributes[scene_data.scene_id] = ButtonAttributes(
                     STATE=ButtonStates.AVAILABLE,
                 )
+
+            self.push_update()
 
         except Exception:  # pylint: disable=broad-exception-caught
             _LOG.exception("[%s] Scene update: protocol error", self.log_id)
@@ -224,7 +195,6 @@ class SmartHub(StatelessHTTPDevice):
         """Return the list of cover entities."""
         self._raw_covers = await self._cover_entry_point.get_instances()  # ty:ignore[invalid-assignment]
 
-        # Wrap raw covers in PowerviewCoverInfo for consistent interface
         self._covers = [
             PowerviewCoverInfo(
                 device_id=str(shade.id),
@@ -241,7 +211,6 @@ class SmartHub(StatelessHTTPDevice):
         """Return the list of scene entities."""
         self._raw_scenes = await self._scene_entry_point.get_instances()  # ty:ignore[invalid-assignment]
 
-        # Wrap raw scenes in PowerviewSceneInfo for consistent interface
         self._scenes = [
             PowerviewSceneInfo(scene_id=str(scene.id), name=scene.name, raw_scene=scene)
             for scene in self._raw_scenes
@@ -254,6 +223,9 @@ class SmartHub(StatelessHTTPDevice):
         if scene_data is None:
             _LOG.error("[%s] Scene %s not found", self.log_id, scene_id)
             return
+        if scene_data.raw_scene is None:
+            _LOG.error("[%s] Scene %s has no raw scene object", self.log_id, scene_id)
+            return
         try:
             async with self.radio_operation_lock:
                 await scene_data.raw_scene.activate()
@@ -265,32 +237,28 @@ class SmartHub(StatelessHTTPDevice):
     async def open_cover(self, cover_id: str, position: int = 0) -> None:
         """Open a cover to a specific position."""
         cover_data = next((c for c in self._covers if c.id == cover_id), None)
-        if cover_data is None:
+        if cover_data is None or cover_data.raw_shade is None:
             _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
             return
 
-        entity_id = create_entity_id(
-            EntityTypes.COVER,
-            self._device_config.identifier,
-            cover_id,
-        )
-
         try:
-            if position is not None:
+            if position:
                 raw_position = ShadePosition(position)
                 async with self.radio_operation_lock:
                     await cover_data.raw_shade.move(raw_position)
-                self._cover_attributes[entity_id] = CoverAttributes(
+                self._cover_attributes[cover_id] = CoverAttributes(
                     STATE=CoverStates.OPEN if position >= 5 else CoverStates.CLOSED,
                     POSITION=position,
                 )
             else:
                 async with self.radio_operation_lock:
                     await cover_data.raw_shade.open()
-                self._cover_attributes[entity_id] = CoverAttributes(
+                self._cover_attributes[cover_id] = CoverAttributes(
                     STATE=CoverStates.OPEN,
                     POSITION=100,
                 )
+
+            self.push_update()
 
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error("[%s] Error opening cover %s: %s", self.log_id, cover_id, err)
@@ -298,55 +266,43 @@ class SmartHub(StatelessHTTPDevice):
     async def close_cover(self, cover_id: str) -> None:
         """Close a cover."""
         cover_data = next((c for c in self._covers if c.id == cover_id), None)
-        if cover_data is None:
+        if cover_data is None or cover_data.raw_shade is None:
             _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
             return
-
-        entity_id = create_entity_id(
-            EntityTypes.COVER,
-            self._device_config.identifier,
-            cover_id,
-        )
 
         try:
             async with self.radio_operation_lock:
                 await cover_data.raw_shade.close()
 
-            self._cover_attributes[entity_id] = CoverAttributes(
+            self._cover_attributes[cover_id] = CoverAttributes(
                 STATE=CoverStates.CLOSED,
                 POSITION=0,
             )
+            self.push_update()
 
         except Exception as err:  # pylint: disable=broad-exception-caught
-            _LOG.error(
-                "[%s] Error turning off cover %s: %s", self.log_id, cover_id, err
-            )
+            _LOG.error("[%s] Error closing cover %s: %s", self.log_id, cover_id, err)
 
     async def stop_cover(self, cover_id: str) -> None:
         """Stop a cover."""
         cover_data = next((c for c in self._covers if c.id == cover_id), None)
-        if cover_data is None:
+        if cover_data is None or cover_data.raw_shade is None:
             _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
             return
-
-        entity_id = create_entity_id(
-            EntityTypes.COVER,
-            self._device_config.identifier,
-            cover_id,
-        )
 
         try:
             async with self.radio_operation_lock:
                 await cover_data.raw_shade.stop()
 
-            # Keep existing position, just update state
-            current_attrs = self._cover_attributes.get(entity_id)
+            # Preserve existing position, just update state
+            current_attrs = self._cover_attributes.get(cover_id)
             current_position = current_attrs.POSITION if current_attrs else 0
 
-            self._cover_attributes[entity_id] = CoverAttributes(
-                STATE=CoverStates.OPEN,  # Stopped cover stays in its current state
+            self._cover_attributes[cover_id] = CoverAttributes(
+                STATE=CoverStates.OPEN,
                 POSITION=current_position,
             )
+            self.push_update()
 
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error("[%s] Error stopping cover %s: %s", self.log_id, cover_id, err)
@@ -354,32 +310,35 @@ class SmartHub(StatelessHTTPDevice):
     async def toggle_cover(self, cover_id: str) -> None:
         """Toggle a cover."""
         cover_data = next((c for c in self._covers if c.id == cover_id), None)
-        if cover_data is None:
+        if cover_data is None or cover_data.raw_shade is None:
             _LOG.error("[%s] Cover %s not found", self.log_id, cover_id)
             return
 
-        entity_id = create_entity_id(
-            EntityTypes.COVER,
-            self._device_config.identifier,
-            cover_id,
+        raw_shade = cover_data.raw_shade
+        current_position = (
+            int(raw_shade.current_position.primary)
+            if raw_shade.current_position is not None
+            and raw_shade.current_position.primary is not None
+            else 0
         )
 
-        current_position = cover_data.raw_shade.current_position.primary
         try:
             if current_position == 0:
                 async with self.radio_operation_lock:
-                    await cover_data.raw_shade.open()
-                self._cover_attributes[entity_id] = CoverAttributes(
+                    await raw_shade.open()
+                self._cover_attributes[cover_id] = CoverAttributes(
                     STATE=CoverStates.OPEN,
                     POSITION=100,
                 )
             else:
                 async with self.radio_operation_lock:
-                    await cover_data.raw_shade.close()
-                self._cover_attributes[entity_id] = CoverAttributes(
+                    await raw_shade.close()
+                self._cover_attributes[cover_id] = CoverAttributes(
                     STATE=CoverStates.CLOSED,
                     POSITION=0,
                 )
+
+            self.push_update()
 
         except Exception as err:  # pylint: disable=broad-exception-caught
             _LOG.error("[%s] Error toggling cover %s: %s", self.log_id, cover_id, err)
