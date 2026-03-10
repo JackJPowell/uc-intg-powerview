@@ -47,7 +47,7 @@ class PowerviewButton(ButtonEntity):
             return
         attrs = self._device.get_button_attributes(self._scene_id)
         if attrs is not None:
-            self.update(attrs)
+            self.update(attrs, force=True)
 
     async def button_cmd_handler(
         self,
